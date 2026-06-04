@@ -29,7 +29,7 @@ INFO_POST_SETTINGS = "https://www.reddit.com/r/RemindMeBot/comments/e1asdu/timez
 INFO_POST_MENTION = "https://www.reddit.com/r/RemindMeBot/comments/1tskg07/remindmebot_is_switching_to_username_summons/"
 
 MENTION_DETECTION_ENABLED = True
-MENTION_DETECTION_WARN = True
+MENTION_DETECTION_WARN = False
 MENTION_REMINDERS_ENABLED = True
 ENCOURAGE_MENTIONS_IN_REPLY = True
 
