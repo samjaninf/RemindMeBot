@@ -13,6 +13,7 @@ import prawcore
 import requests
 
 import counters
+import parse_corpus
 import static
 
 log = discord_logging.get_logger()
@@ -82,6 +83,7 @@ def find_reminder_time(body, trigger):
 
 
 def parse_time(time_string, base_time, timezone_string):
+	base_time_original = base_time
 	base_time = datetime_as_timezone(base_time, timezone_string)
 
 	try:
@@ -91,6 +93,7 @@ def parse_time(time_string, base_time, timezone_string):
 			settings={"PREFER_DATES_FROM": 'future', "RELATIVE_BASE": base_time.replace(tzinfo=None)})
 	except Exception:
 		date_time = None
+	stage = "dateparser" if date_time is not None else None
 
 	if date_time is None:
 		try:
@@ -109,6 +112,8 @@ def parse_time(time_string, base_time, timezone_string):
 				date_time = None
 		except Exception:
 			date_time = None
+		if date_time is not None:
+			stage = "search_dates"
 
 	if date_time is None:
 		try:
@@ -117,8 +122,11 @@ def parse_time(time_string, base_time, timezone_string):
 				date_time = None
 		except Exception:
 			date_time = None
+		if date_time is not None:
+			stage = "parsedatetime"
 
 	if date_time is None:
+		parse_corpus.record(time_string, base_time_original, timezone_string, None, None)
 		return None
 
 	if date_time.tzinfo is None:
@@ -128,6 +136,8 @@ def parse_time(time_string, base_time, timezone_string):
 			date_time = datetime_force_utc(date_time)
 
 	date_time = datetime_as_utc(date_time)
+
+	parse_corpus.record(time_string, base_time_original, timezone_string, date_time, stage)
 
 	return date_time
 
