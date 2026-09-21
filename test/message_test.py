@@ -1,10 +1,13 @@
 from datetime import timedelta
 import pytz
+import prawcore
 import discord_logging
 
 log = discord_logging.get_logger(init=True)
 
 import messages
+import comments
+import counters
 import utils
 from praw_wrapper import reddit_test
 import static
@@ -502,3 +505,132 @@ def test_set_clock(database, reddit):
 	assert "Reset your clock type to the default 24 hour clock" in result
 	user = database.get_or_add_user(username)
 	assert user.time_format is None
+
+
+def _make_mention(reddit, username, body):
+	"""Register a comment with the mock and build the matching inbox item the
+	way PRAW delivers a username mention: subject, context, no permalink."""
+	comment_id = reddit_test.random_id()
+	thread_id = reddit_test.random_id()
+	created = utils.datetime_now()
+	registered = reddit_test.RedditObject(
+		body=body,
+		author=username,
+		created=created,
+		id=comment_id,
+		link_id="t3_"+thread_id,
+		permalink=f"/r/test/comments/{thread_id}/_/{comment_id}/",
+		subreddit="test"
+	)
+	reddit.add_comment(registered)
+
+	inbox_item = reddit_test.RedditObject(
+		body=body,
+		author=username,
+		created=created,
+		id=comment_id,
+		prefix="t1"
+	)
+	inbox_item.subject = "username mention"
+	inbox_item.context = f"/r/test/comments/{thread_id}/_/{comment_id}/?context=3"
+	inbox_item.subreddit = "test"
+	return registered, inbox_item
+
+
+def test_process_mention_creates_reminder_and_replies(database, reddit):
+	comments.reset_mention_memory()
+	username = "Watchful1"
+	registered, inbox_item = _make_mention(reddit, username, f"u/{static.ACCOUNT_NAME} 1 day")
+
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True
+
+	reminders = database.get_all_user_reminders(username)
+	assert len(reminders) == 1
+	assert reminders[0].source == utils.reddit_link(registered.permalink)
+	assert len(registered.children) == 1
+	assert "CLICK THIS LINK" in registered.get_first_child().body
+	assert len(reddit.sent_messages) == 0
+
+
+def test_process_mention_with_command_is_left_to_ingest(database, reddit):
+	comments.reset_mention_memory()
+	username = "Watchful1"
+	registered, inbox_item = _make_mention(reddit, username, f"u/{static.ACCOUNT_NAME} {static.TRIGGER}! 1 day")
+
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True
+
+	assert len(database.get_all_user_reminders(username)) == 0
+	assert len(registered.children) == 0
+	assert inbox_item.id not in comments._processed_mentions
+
+
+def _duplicate_count():
+	return counters.mentions.labels(type='duplicate')._value.get()
+
+
+def test_process_mention_redelivered_is_processed_once(database, reddit):
+	comments.reset_mention_memory()
+	username = "Watchful1"
+	registered, inbox_item = _make_mention(reddit, username, f"u/{static.ACCOUNT_NAME} 1 day")
+	before = _duplicate_count()
+
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True
+
+	assert len(database.get_all_user_reminders(username)) == 1
+	assert len(registered.children) == 1
+	assert len(reddit.sent_messages) == 0
+	assert _duplicate_count() == before + 2
+
+
+def test_process_mention_redelivered_after_restart_uses_database(database, reddit):
+	comments.reset_mention_memory()
+	username = "Watchful1"
+	registered, inbox_item = _make_mention(reddit, username, f"u/{static.ACCOUNT_NAME} 1 day")
+	before = _duplicate_count()
+
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True
+	comments.reset_mention_memory()  # simulate a process restart
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True
+
+	assert len(database.get_all_user_reminders(username)) == 1
+	assert len(registered.children) == 1
+	assert len(reddit.sent_messages) == 0
+	assert _duplicate_count() == before + 1
+
+
+def test_process_mention_database_hit_then_uses_memory(database, reddit):
+	comments.reset_mention_memory()
+	registered, inbox_item = _make_mention(reddit, "Watchful1", f"u/{static.ACCOUNT_NAME} 1 day")
+
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True
+	comments.reset_mention_memory()  # restart
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True  # database hit
+	minimal = messages.minimal_comment_from_mention(inbox_item)
+	assert comments.duplicate_mention_reason(minimal, database) == ("memory", 1)
+
+
+def test_process_mention_failure_is_not_recorded(database, reddit):
+	comments.reset_mention_memory()
+	registered, inbox_item = _make_mention(reddit, "Watchful1", f"u/{static.ACCOUNT_NAME} 1 day")
+	del inbox_item.context  # building the MinimalComment now raises
+
+	# Non-transient error: still marked read, but nothing was processed so
+	# nothing should be remembered as processed.
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is True
+	assert inbox_item.id not in comments._processed_mentions
+
+
+def test_process_mention_transient_failure_is_retried(database, reddit, monkeypatch):
+	comments.reset_mention_memory()
+	registered, inbox_item = _make_mention(reddit, "Watchful1", f"u/{static.ACCOUNT_NAME} 1 day")
+
+	def boom(*args, **kwargs):
+		raise prawcore.exceptions.ServerError(type("Resp", (), {"status_code": 500})())
+	monkeypatch.setattr(comments, "process_comment", boom)
+
+	# Transient error: not marked read so Reddit redelivers, and not recorded so
+	# the redelivery is processed instead of being skipped as a duplicate.
+	assert messages.process_mention(inbox_item, reddit, database, "1/1") is False
+	assert inbox_item.id not in comments._processed_mentions

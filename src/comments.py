@@ -1,5 +1,6 @@
 import discord_logging
 import traceback
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import utils
@@ -26,6 +27,59 @@ class MinimalComment:
 	permalink: str
 	link_id: str
 	body: str
+
+
+MENTION_MEMORY_SIZE = 500
+MENTION_WARN_EVERY = 60
+_processed_mentions = OrderedDict()
+
+
+def reset_mention_memory():
+	_processed_mentions.clear()
+
+
+def record_processed_mention(comment_id):
+	"""Remember a handled inbox mention id so a redelivery of it is skipped. The
+	dict is bounded at MENTION_MEMORY_SIZE and evicts the oldest entry first.
+	"""
+	_processed_mentions[comment_id] = 0
+	_processed_mentions.move_to_end(comment_id)
+	while len(_processed_mentions) > MENTION_MEMORY_SIZE:
+		_processed_mentions.popitem(last=False)
+
+
+def duplicate_mention_reason(comment, database):
+	"""Why this inbox mention should be skipped, or None if it is new.
+
+	Reddit sometimes keeps returning the same mention as unread for hours after
+	mark_read succeeds. Memory catches that within one process and returns
+	("memory", repeat_count); the database check catches a redelivery after a
+	restart and returns ("database", 0). A reminder saved before a transient
+	reply failure also counts as a database hit, so that redelivery loses its
+	confirmation. Accepted, see the spec.
+	"""
+	if comment.id in _processed_mentions:
+		_processed_mentions[comment.id] += 1
+		_processed_mentions.move_to_end(comment.id)
+		return "memory", _processed_mentions[comment.id]
+
+	source = utils.reddit_link(comment.permalink)
+	if database.get_reminder_by_user_source(comment.author, source) is not None:
+		return "database", 0
+
+	return None
+
+
+def should_warn_duplicate(reason, count):
+	"""Whether a skipped duplicate should be logged as a warning.
+
+	Memory hits warn on the first repeat and then every MENTION_WARN_EVERY, so a
+	multi-hour incident sends Discord a line about every 30 minutes instead of
+	one per loop. Database hits happen once per restart and always warn.
+	"""
+	if reason == "database":
+		return True
+	return count == 1 or count % MENTION_WARN_EVERY == 0
 
 
 def database_set_seen(database, comment_seen):

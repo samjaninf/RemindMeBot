@@ -35,8 +35,9 @@ because it is free; the database only on the first sighting of an id.
 
 ### Helper
 
-`comments.duplicate_mention_reason(minimal, database)` returns `"memory"`,
-`"database"`, or `None`. It also owns the memory bookkeeping described below.
+`comments.duplicate_mention_reason(minimal, database)` returns
+`("memory", repeat_count)`, `("database", 0)`, or `None`. The count feeds the
+warning cadence below. It also owns the memory bookkeeping described below.
 `messages.py` calls it right after building the `MinimalComment`.
 
 ### Memory layer
@@ -59,10 +60,20 @@ with an exact match on `reminders.source`. `source` is built exactly as
 `parse_comment` builds it: `utils.reddit_link(minimal.permalink)`. If a row
 exists the reason is `"database"`.
 
-Known gap, accepted: a short reminder that fires while the item is still stuck
-has its row deleted, so a post-restart redelivery would create one more copy.
-This needs a restart during an incident and a reminder shorter than the
-incident, which is rare enough to ignore.
+A database hit is also recorded in memory, so after a restart only the first
+redelivery goes to the database; later ones follow the memory cadence.
+
+Known gaps, accepted:
+
+- A short reminder that fires while the item is still stuck has its row
+  deleted, so a post-restart redelivery would create one more copy. This needs
+  a restart during an incident and a reminder shorter than the incident.
+- If the first processing saves the reminder and then fails transiently on the
+  reply or PM (network timeout), the row is committed by the existing
+  `finally` and the redelivery is treated as a database duplicate. The
+  reminder still fires later, but the confirmation is never sent. Before this
+  change the same failure produced a duplicate reminder plus a retried reply,
+  so this is a narrower failure than before, and rare.
 
 ### Behavior on duplicate
 
@@ -84,8 +95,8 @@ Discord) on the first repeat and then on every 60th repeat (roughly every 30
 minutes at the 30-second loop cadence). Every other repeat logs at INFO. The
 line includes the inbox id, the author, the running count, and the permalink.
 
-Duplicates found by the database layer always log a WARNING; they only occur
-after a restart mid-incident and are rare.
+Duplicates found by the database layer always log a WARNING; because the id is
+then recorded in memory, this happens once per restart per stuck item.
 
 ## Files
 

@@ -105,6 +105,15 @@ class _DatabaseReminders:
 
 		return reminder is not None
 
+	def get_reminder_by_user_source(self, user_name, source):
+		log.debug(f"Fetching reminder for u/{user_name} from source: {source}")
+
+		return self.session.query(Reminder)\
+			.join(User)\
+			.filter(User.name == user_name)\
+			.filter(Reminder.source == source)\
+			.first()
+
 	def delete_reminder(self, reminder):
 		log.debug(f"Deleting reminder by id: {reminder.id}")
 		self.session.delete(reminder)

@@ -339,6 +339,72 @@ def process_message(message, reddit, database, count_string=""):
 	database.commit()
 
 
+def minimal_comment_from_mention(message):
+	# PRAW's inbox payload omits permalink and link_id, but `context`
+	# carries the full permalink URL — strip the query string and parse
+	# the post id out of the path. Build a MinimalComment so downstream
+	# code never sees the lazy PRAW object.
+	permalink_path = message.context.split('?', 1)[0]
+	post_id_match = re.match(r'/r/[^/]+/comments/([^/]+)/', permalink_path)
+	return comments.MinimalComment(
+		id=message.id,
+		author=message.author.name,
+		subreddit=str(message.subreddit),
+		created_utc=message.created_utc,
+		permalink=permalink_path,
+		link_id=f"t3_{post_id_match.group(1)}",
+		body=message.body,
+	)
+
+
+def process_mention(message, reddit, database, count_string):
+	author = utils.author_name(message.author)
+	has_command = comments.body_contains_command(message.body)
+	try:
+		permalink = utils.reddit_link(message.permalink)
+	except AttributeError:
+		permalink = f"comment {message.id}"
+
+	if has_command:
+		counters.mentions.labels(type='with_command').inc()
+		log.info(f"Username mention from u/{author}: {message.id} : {permalink}")
+		return True
+
+	mark_read = True
+	try:
+		minimal = minimal_comment_from_mention(message)
+
+		# Reddit sometimes keeps returning the same mention as unread for hours
+		# even though mark_read succeeds. Skip anything already handled, either
+		# in this process or as a pending reminder in the database.
+		duplicate = comments.duplicate_mention_reason(minimal, database)
+		if duplicate is not None:
+			reason, count = duplicate
+			if reason == "database":
+				comments.record_processed_mention(minimal.id)
+			counters.mentions.labels(type='duplicate').inc()
+			detail = f"{reason}, repeat {count}" if reason == "memory" else reason
+			line = f"Duplicate mention from u/{author} skipped ({detail}): {message.id} : {permalink}"
+			if comments.should_warn_duplicate(reason, count):
+				log.warning(line)
+			else:
+				log.info(line)
+			return True
+
+		counters.mentions.labels(type='mention_only').inc()
+		log.info(f"Username mention from u/{author}: {message.id} : {permalink}")
+		comments.process_comment(minimal, reddit, database, count_string)
+		comments.record_processed_mention(minimal.id)
+	except Exception as err:
+		mark_read = not utils.process_error(
+			f"Error processing mention: {message.id} : u/{author}",
+			err, traceback.format_exc()
+		)
+	finally:
+		database.commit()
+	return mark_read
+
+
 def process_messages(reddit, database):
 	messages = reddit.get_messages()
 	if len(messages):
@@ -367,40 +433,7 @@ def process_messages(reddit, database):
 		else:
 			is_mention = message.subject == "username mention"
 			if is_mention:
-				has_command = comments.body_contains_command(message.body)
-				mention_type = 'with_command' if has_command else 'mention_only'
-				counters.mentions.labels(type=mention_type).inc()
-				try:
-					permalink = utils.reddit_link(message.permalink)
-				except AttributeError:
-					permalink = f"comment {message.id}"
-				log.info(f"Username mention from u/{utils.author_name(message.author)}: {message.id} : {permalink}")
-
-				if not has_command:
-					try:
-						# PRAW's inbox payload omits permalink and link_id, but `context`
-						# carries the full permalink URL — strip the query string and parse
-						# the post id out of the path. Build a MinimalComment so downstream
-						# code never sees the lazy PRAW object.
-						permalink_path = message.context.split('?', 1)[0]
-						post_id_match = re.match(r'/r/[^/]+/comments/([^/]+)/', permalink_path)
-						minimal = comments.MinimalComment(
-							id=message.id,
-							author=message.author.name,
-							subreddit=str(message.subreddit),
-							created_utc=message.created_utc,
-							permalink=permalink_path,
-							link_id=f"t3_{post_id_match.group(1)}",
-							body=message.body,
-						)
-						comments.process_comment(minimal, reddit, database, f"{i}/{len(messages)}")
-					except Exception as err:
-						mark_read = not utils.process_error(
-							f"Error processing mention: {message.id} : u/{utils.author_name(message.author)}",
-							err, traceback.format_exc()
-						)
-					finally:
-						database.commit()
+				mark_read = process_mention(message, reddit, database, f"{i}/{len(messages)}")
 			else:
 				log.info(f"Object not message, skipping: {message.id}")
 

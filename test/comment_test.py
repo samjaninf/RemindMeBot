@@ -840,3 +840,100 @@ def test_update_comments_shows_nudge_for_command(database, reddit, monkeypatch):
 	edited_body = comment.get_first_child().body
 	assert "2 OTHERS CLICKED THIS LINK" in edited_body
 	assert "is switching to username summons" in edited_body
+
+
+def test_get_reminder_by_user_source(database):
+	source = "https://www.reddit.com/r/test/comments/abc123/_/def456/"
+	assert database.get_reminder_by_user_source("Watchful1", source) is None
+
+	database.add_reminder(Reminder(
+		source=source,
+		message="msg",
+		user=database.get_or_add_user("Watchful1"),
+		requested_date=utils.parse_datetime_string("2019-01-01 04:00:00"),
+		target_date=utils.parse_datetime_string("2019-01-05 04:00:00")
+	))
+	database.commit()
+
+	assert database.get_reminder_by_user_source("Watchful1", source) is not None
+	assert database.get_reminder_by_user_source("Watchful1", source + "x") is None
+	assert database.get_reminder_by_user_source("SomeoneElse", source) is None
+
+
+def _minimal(comment_id, username="Watchful1"):
+	thread_id = reddit_test.random_id()
+	return comments.MinimalComment(
+		id=comment_id,
+		author=username,
+		subreddit="test",
+		created_utc=int(utils.datetime_now().timestamp()),
+		permalink=f"/r/test/comments/{thread_id}/_/{comment_id}/",
+		link_id="t3_"+thread_id,
+		body=f"u/{static.ACCOUNT_NAME} 1 day",
+	)
+
+
+def test_duplicate_mention_unknown_id_is_not_duplicate(database):
+	comments.reset_mention_memory()
+	assert comments.duplicate_mention_reason(_minimal(reddit_test.random_id()), database) is None
+
+
+def test_duplicate_mention_memory_counts_repeats(database):
+	comments.reset_mention_memory()
+	comment_id = reddit_test.random_id()
+	minimal = _minimal(comment_id)
+	comments.record_processed_mention(comment_id)
+
+	assert comments.duplicate_mention_reason(minimal, database) == ("memory", 1)
+	assert comments.duplicate_mention_reason(minimal, database) == ("memory", 2)
+	assert comments.duplicate_mention_reason(minimal, database) == ("memory", 3)
+
+
+def test_duplicate_mention_database_hit_after_memory_cleared(database):
+	comments.reset_mention_memory()
+	minimal = _minimal(reddit_test.random_id())
+	database.add_reminder(Reminder(
+		source=utils.reddit_link(minimal.permalink),
+		message="msg",
+		user=database.get_or_add_user(minimal.author),
+		requested_date=utils.parse_datetime_string("2019-01-01 04:00:00"),
+		target_date=utils.parse_datetime_string("2019-01-05 04:00:00")
+	))
+	database.commit()
+
+	assert comments.duplicate_mention_reason(minimal, database) == ("database", 0)
+
+
+def test_duplicate_mention_database_ignores_other_user(database):
+	comments.reset_mention_memory()
+	minimal = _minimal(reddit_test.random_id())
+	database.add_reminder(Reminder(
+		source=utils.reddit_link(minimal.permalink),
+		message="msg",
+		user=database.get_or_add_user("SomeoneElse"),
+		requested_date=utils.parse_datetime_string("2019-01-01 04:00:00"),
+		target_date=utils.parse_datetime_string("2019-01-05 04:00:00")
+	))
+	database.commit()
+
+	assert comments.duplicate_mention_reason(minimal, database) is None
+
+
+def test_mention_memory_evicts_oldest(database):
+	comments.reset_mention_memory()
+	first_id = reddit_test.random_id()
+	comments.record_processed_mention(first_id)
+	for _ in range(comments.MENTION_MEMORY_SIZE):
+		comments.record_processed_mention(reddit_test.random_id())
+
+	assert comments.duplicate_mention_reason(_minimal(first_id), database) is None
+
+
+def test_should_warn_duplicate_cadence():
+	assert comments.should_warn_duplicate("memory", 1) is True
+	assert comments.should_warn_duplicate("memory", 2) is False
+	assert comments.should_warn_duplicate("memory", 59) is False
+	assert comments.should_warn_duplicate("memory", 60) is True
+	assert comments.should_warn_duplicate("memory", 61) is False
+	assert comments.should_warn_duplicate("memory", 120) is True
+	assert comments.should_warn_duplicate("database", 0) is True
