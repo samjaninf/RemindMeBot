@@ -67,12 +67,8 @@ def is_pure_mention(body):
 	"""True if the body is a username mention with no bang-command.
 
 	These are handled by the inbox dispatch path in messages.py and should be
-	skipped by the ingest pipeline to avoid duplicate reminders. Returns False
-	when MENTION_REMINDERS_ENABLED is off so the ingest path keeps its current
-	(do-nothing) handling instead of silently swallowing them.
+	skipped by the ingest pipeline to avoid duplicate reminders.
 	"""
-	if not static.MENTION_REMINDERS_ENABLED:
-		return False
 	if static.MENTION_PATTERN.search(body.lower().strip()) is None:
 		return False
 	return not body_contains_command(body)
@@ -92,7 +88,7 @@ def parse_comment(comment, database, count_string, reddit):
 	cakeday = False
 	mention = False
 	allow_default = True
-	mention_match = static.MENTION_PATTERN.search(body) if static.MENTION_REMINDERS_ENABLED else None
+	mention_match = static.MENTION_PATTERN.search(body)
 	if trigger_in_text(body, static.TRIGGER_RECURRING_LOWER):
 		log.debug("Recurring reminder comment")
 		recurring = True

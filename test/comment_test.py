@@ -58,8 +58,7 @@ def test_process_comments_ingest(database, reddit):
 	assert ingest_database.get_count_comments(None) == 0
 
 
-def test_process_comments_skips_pure_mention(database, reddit, monkeypatch):
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", True)
+def test_process_comments_skips_pure_mention(database, reddit):
 	ingest_database = IngestDatabase(debug=True)
 	ingest_database.set_default_client("updateme")
 
@@ -564,8 +563,7 @@ def test_process_cakeday_comment(database, reddit):
 	assert reminders[0].message == "Happy Cakeday!"
 
 
-def test_process_mention_single(database, reddit, monkeypatch):
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", True)
+def test_process_mention_single(database, reddit):
 	created = utils.datetime_now()
 	username = "Watchful1"
 	comment_id = reddit_test.random_id()
@@ -598,8 +596,7 @@ def test_process_mention_single(database, reddit, monkeypatch):
 	assert reminders[0].recurrence is None
 
 
-def test_process_mention_single_slash_form(database, reddit, monkeypatch):
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", True)
+def test_process_mention_single_slash_form(database, reddit):
 	created = utils.datetime_now()
 	username = "Watchful1"
 	comment_id = reddit_test.random_id()
@@ -627,8 +624,7 @@ def test_process_mention_single_slash_form(database, reddit, monkeypatch):
 	assert reminders[0].recurrence is None
 
 
-def test_process_mention_repeat(database, reddit, monkeypatch):
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", True)
+def test_process_mention_repeat(database, reddit):
 	created = utils.datetime_now()
 	username = "Watchful1"
 	comment_id = reddit_test.random_id()
@@ -658,8 +654,7 @@ def test_process_mention_repeat(database, reddit, monkeypatch):
 	assert reminders[0].recurrence == "1 day"
 
 
-def test_process_mention_cakeday(database, reddit, monkeypatch):
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", True)
+def test_process_mention_cakeday(database, reddit):
 	username = "Watchful1"
 	user = reddit_test.User(username, utils.parse_datetime_string("2015-05-05 15:25:17").timestamp())
 	reddit.add_user(user)
@@ -691,8 +686,7 @@ def test_process_mention_cakeday(database, reddit, monkeypatch):
 	assert reminders[0].message == "Happy Cakeday!"
 
 
-def test_process_mention_case_insensitive(database, reddit, monkeypatch):
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", True)
+def test_process_mention_case_insensitive(database, reddit):
 	created = utils.datetime_now()
 	username = "Watchful1"
 	comment_id = reddit_test.random_id()
@@ -716,32 +710,7 @@ def test_process_mention_case_insensitive(database, reddit, monkeypatch):
 	assert reminders[0].target_date == created + timedelta(hours=24)
 
 
-def test_process_mention_disabled(database, reddit, monkeypatch):
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", False)
-	username = "Watchful1"
-	comment_id = reddit_test.random_id()
-	thread_id = reddit_test.random_id()
-	comment = reddit_test.RedditObject(
-		body=f"u/{static.ACCOUNT_NAME} 1 day",
-		author=username,
-		created=utils.datetime_now(),
-		id=comment_id,
-		link_id="t3_"+thread_id,
-		permalink=f"/r/test/{thread_id}/_/{comment_id}/",
-		subreddit="test"
-	)
-
-	reddit.add_comment(comment)
-
-	comments.process_comment(comment.get_ingest_comment(), reddit, database)
-	assert len(comment.children) == 0
-
-	reminders = database.get_all_user_reminders(username)
-	assert len(reminders) == 0
-
-
-def test_process_mention_no_time_defaults(database, reddit, monkeypatch):
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", True)
+def test_process_mention_no_time_defaults(database, reddit):
 	created = utils.datetime_now()
 	username = "Watchful1"
 	comment_id = reddit_test.random_id()
@@ -765,11 +734,10 @@ def test_process_mention_no_time_defaults(database, reddit, monkeypatch):
 	assert reminders[0].target_date == created + timedelta(hours=24)
 
 
-def test_process_mention_via_minimal_comment(database, reddit, monkeypatch):
+def test_process_mention_via_minimal_comment(database, reddit):
 	"""End-to-end shape test for the inbox-mention dispatch: process_comment
 	accepts a MinimalComment (the duck-type messages.py constructs from a PRAW
 	inbox message) and produces a reminder + reply identical to the ingest path."""
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", True)
 
 	username = "Watchful1"
 	created = utils.datetime_now()
@@ -817,7 +785,6 @@ def _make_dup_reminder(database, permalink, target_date):
 
 
 def test_update_comments_suppresses_nudge_for_mention(database, reddit, monkeypatch):
-	monkeypatch.setattr(static, "MENTION_REMINDERS_ENABLED", True)
 	monkeypatch.setattr(static, "ENCOURAGE_MENTIONS_IN_REPLY", True)
 	comment_id = reddit_test.random_id()
 	thread_id = reddit_test.random_id()

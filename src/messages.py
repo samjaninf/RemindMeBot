@@ -366,7 +366,7 @@ def process_messages(reddit, database):
 					database.commit()
 		else:
 			is_mention = message.subject == "username mention"
-			if is_mention and (static.MENTION_DETECTION_ENABLED or static.MENTION_REMINDERS_ENABLED):
+			if is_mention:
 				has_command = comments.body_contains_command(message.body)
 				mention_type = 'with_command' if has_command else 'mention_only'
 				counters.mentions.labels(type=mention_type).inc()
@@ -374,12 +374,9 @@ def process_messages(reddit, database):
 					permalink = utils.reddit_link(message.permalink)
 				except AttributeError:
 					permalink = f"comment {message.id}"
-				if static.MENTION_DETECTION_WARN:
-					log.warning(f"Username mention from u/{utils.author_name(message.author)}: {message.id} : {permalink}")
-				else:
-					log.info(f"Username mention from u/{utils.author_name(message.author)}: {message.id} : {permalink}")
+				log.info(f"Username mention from u/{utils.author_name(message.author)}: {message.id} : {permalink}")
 
-				if static.MENTION_REMINDERS_ENABLED and not has_command:
+				if not has_command:
 					try:
 						# PRAW's inbox payload omits permalink and link_id, but `context`
 						# carries the full permalink URL — strip the query string and parse
